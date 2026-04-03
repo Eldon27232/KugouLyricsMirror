@@ -45,11 +45,8 @@
 
 ## 截图
 
-你可以在这里放项目截图，例如：
-
-- 主控制界面
-- 透明预览窗效果
-- SteamVR / OVR Toolkit 中的实际显示效果
+<img width="520" height="395" alt="image" src="https://github.com/user-attachments/assets/f6c593b1-fc4a-4f9d-a2dd-8beff6e9a502" />
+![55b96bcf32491a1b55a99aa559bcfcab](https://github.com/user-attachments/assets/d51f6087-07c2-4538-a0d6-c5cd72215252)
 
 ---
 
