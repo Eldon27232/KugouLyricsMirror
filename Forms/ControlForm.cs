@@ -2,6 +2,7 @@ namespace KugouLyricsMirror;
 
 internal sealed class ControlForm : Form
 {
+    private readonly ComboBox _captureModeSelector = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 140 };
     private readonly NumericUpDown _x = new() { Maximum = 100000, Minimum = -100000, Width = 90 };
     private readonly NumericUpDown _y = new() { Maximum = 100000, Minimum = -100000, Width = 90 };
     private readonly NumericUpDown _w = new() { Maximum = 100000, Minimum = 20, Value = 600, Width = 90 };
@@ -10,15 +11,24 @@ internal sealed class ControlForm : Form
     private readonly NumericUpDown _threshold = new() { Maximum = 255, Minimum = 0, Value = 36, Width = 90 };
     private readonly CheckBox _topMost = new() { Text = "预览窗置顶" };
     private readonly CheckBox _excludeFromCapture = new() { Text = "预览窗不参与屏幕捕获（开了会导致 SteamVR 抓黑）", Checked = false, AutoSize = true };
+    private readonly CheckBox _showBackdrop = new() { Text = "显示黑色底板", AutoSize = true };
+    private readonly CheckBox _lockBackdrop = new() { Text = "锁定底板", AutoSize = true };
     private readonly Panel _colorPreview = new() { Width = 48, Height = 24, BorderStyle = BorderStyle.FixedSingle, Margin = new Padding(8, 3, 3, 3) };
     private readonly Label _status = new() { AutoSize = true, Text = "未启动" };
 
     private PreviewForm? _preview;
+    private BackdropForm? _backdrop;
     private readonly Button _start = new() { Text = "启动镜像", AutoSize = true };
     private readonly Button _stop = new() { Text = "停止", AutoSize = true, Enabled = false };
     private readonly Button _pickRegion = new() { Text = "框选区域", AutoSize = true };
     private readonly Button _pickColor = new() { Text = "吸管取色", AutoSize = true };
     private readonly Button _apply = new() { Text = "应用到预览窗", AutoSize = true };
+    private readonly Button _alignBackdrop = new() { Text = "底板对齐源区域", AutoSize = true };
+    private readonly ListBox _windowList = new() { Width = 760, Height = 140, HorizontalScrollbar = true };
+    private readonly Button _scanWindows = new() { Text = "扫描窗口", AutoSize = true };
+    private readonly Button _bindWindow = new() { Text = "绑定窗口", AutoSize = true };
+    private readonly Button _refreshDwm = new() { Text = "刷新代理", AutoSize = true };
+    private readonly Label _selectedWindow = new() { AutoSize = true, Text = "未绑定窗口" };
 
     public ControlForm()
     {
@@ -30,12 +40,13 @@ internal sealed class ControlForm : Form
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
+        _captureModeSelector.Items.AddRange(["窗口代理 DWM", "窗口捕获抠色", "区域抠色"]);
         LoadConfigToUi();
 
         var grid = new TableLayoutPanel
         {
             ColumnCount = 2,
-            RowCount = 9,
+            RowCount = 13,
             AutoSize = true,
             Padding = new Padding(12),
             Dock = DockStyle.Fill
@@ -46,6 +57,14 @@ internal sealed class ControlForm : Form
             grid.Controls.Add(new Label { Text = label, AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(3, 8, 3, 8) });
             grid.Controls.Add(control);
         }
+
+        AddRow("捕获模式", _captureModeSelector);
+
+        var windowButtons = new FlowLayoutPanel { AutoSize = true };
+        windowButtons.Controls.AddRange([_scanWindows, _bindWindow, _refreshDwm]);
+        AddRow("窗口操作", windowButtons);
+        AddRow("窗口列表", _windowList);
+        AddRow("当前窗口", _selectedWindow);
 
         AddRow("源区域 X", _x);
         AddRow("源区域 Y", _y);
@@ -61,6 +80,7 @@ internal sealed class ControlForm : Form
 
         AddRow("阈值", _threshold);
         AddRow("选项", new FlowLayoutPanel { AutoSize = true, Controls = { _topMost, _excludeFromCapture } });
+        AddRow("黑色底板", new FlowLayoutPanel { AutoSize = true, Controls = { _showBackdrop, _lockBackdrop, _alignBackdrop } });
 
         var buttonRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
         buttonRow.Controls.AddRange([_pickRegion, _apply, _start, _stop]);
@@ -74,12 +94,25 @@ internal sealed class ControlForm : Form
         _apply.Click += (_, _) => ApplyToPreview();
         _start.Click += (_, _) => StartPreview();
         _stop.Click += (_, _) => StopPreview();
+        _captureModeSelector.SelectedIndexChanged += (_, _) => CaptureModeChanged();
+        _scanWindows.Click += (_, _) => ScanWindows();
+        _bindWindow.Click += (_, _) => BindSelectedWindow();
+        _refreshDwm.Click += (_, _) => RefreshDwmProxy();
+        _windowList.DoubleClick += (_, _) => BindSelectedWindow();
+        _showBackdrop.CheckedChanged += (_, _) => ToggleBackdrop();
+        _lockBackdrop.CheckedChanged += (_, _) => ApplyBackdropLock();
+        _alignBackdrop.Click += (_, _) => AlignBackdropToSourceRegion();
+
+        if (_showBackdrop.Checked)
+            BeginInvoke((MethodInvoker)ToggleBackdrop);
 
         FormClosing += (_, _) =>
         {
             SaveUiToConfig();
             _preview?.Close();
             _preview?.Dispose();
+            _backdrop?.Close();
+            _backdrop?.Dispose();
         };
     }
 
@@ -91,13 +124,24 @@ internal sealed class ControlForm : Form
         _h.Value = Math.Max(20, AppConfig.Current.Height);
         _fps.Value = Math.Clamp(AppConfig.Current.Fps, 1, 60);
         _threshold.Value = Math.Clamp(AppConfig.Current.ColorThreshold, 0, 255);
+        _captureModeSelector.SelectedIndex = AppConfig.Current.CaptureMode switch
+        {
+            CaptureMode.WindowChromaKey => 1,
+            CaptureMode.RegionChromaKey => 2,
+            _ => 0
+        };
         _topMost.Checked = AppConfig.Current.TopMost;
         _excludeFromCapture.Checked = AppConfig.Current.ExcludeFromCapture;
+        _showBackdrop.Checked = AppConfig.Current.BackdropVisible;
+        _lockBackdrop.Checked = AppConfig.Current.BackdropLocked;
         _colorPreview.BackColor = AppConfig.Current.KeyColor;
+        UpdateSelectedWindowLabel();
+        UpdateModeUi();
     }
 
-    private void SaveUiToConfig()
+    private bool SaveUiToConfig()
     {
+        _backdrop?.SaveBoundsToConfig(AppConfig.Current);
         AppConfig.Current = new Config
         {
             X = (int)_x.Value,
@@ -108,9 +152,22 @@ internal sealed class ControlForm : Form
             ColorThreshold = (int)_threshold.Value,
             KeyColorArgb = _colorPreview.BackColor.ToArgb(),
             TopMost = _topMost.Checked,
-            ExcludeFromCapture = _excludeFromCapture.Checked
+            ExcludeFromCapture = _excludeFromCapture.Checked,
+            CaptureMode = GetSelectedCaptureMode(),
+            SourceWindowHandle = AppConfig.Current.SourceWindowHandle,
+            BackdropVisible = _showBackdrop.Checked,
+            BackdropLocked = _lockBackdrop.Checked,
+            BackdropX = AppConfig.Current.BackdropX,
+            BackdropY = AppConfig.Current.BackdropY,
+            BackdropWidth = AppConfig.Current.BackdropWidth,
+            BackdropHeight = AppConfig.Current.BackdropHeight
         };
-        AppConfig.Save();
+        _backdrop?.SaveBoundsToConfig(AppConfig.Current);
+        if (AppConfig.Save(out var errorMessage))
+            return true;
+
+        _status.Text = $"配置保存失败: {errorMessage}";
+        return false;
     }
 
     private void PickRegion()
@@ -145,23 +202,49 @@ internal sealed class ControlForm : Form
 
     private void ApplyToPreview()
     {
-        SaveUiToConfig();
-        _preview?.ApplyConfig(AppConfig.Current);
-        _status.Text = $"区域 {AppConfig.Current.X},{AppConfig.Current.Y} {AppConfig.Current.Width}x{AppConfig.Current.Height} @ {AppConfig.Current.Fps} FPS / 阈值 {AppConfig.Current.ColorThreshold}";
+        if (!SaveUiToConfig()) return;
+        if (_preview is not null && !_preview.ApplyConfig(AppConfig.Current, out var errorMessage))
+        {
+            _status.Text = $"应用失败: {errorMessage}";
+            return;
+        }
+        ApplyToBackdrop();
+        _status.Text = AppConfig.Current.CaptureMode switch
+        {
+            CaptureMode.DwmWindow => $"窗口代理已应用: 0x{AppConfig.Current.SourceWindowHandle:X}",
+            CaptureMode.WindowChromaKey => $"窗口捕获抠色已应用: 0x{AppConfig.Current.SourceWindowHandle:X} / 阈值 {AppConfig.Current.ColorThreshold}",
+            _ => $"区域 {AppConfig.Current.X},{AppConfig.Current.Y} {AppConfig.Current.Width}x{AppConfig.Current.Height} @ {AppConfig.Current.Fps} FPS / 阈值 {AppConfig.Current.ColorThreshold}"
+        };
     }
 
     private void StartPreview()
     {
-        SaveUiToConfig();
+        if (!SaveUiToConfig()) return;
 
         _preview ??= new PreviewForm();
-        _preview.ApplyConfig(AppConfig.Current);
+        _preview.StatusMessage -= PreviewStatusMessage;
+        _preview.StatusMessage += PreviewStatusMessage;
+        if (!_preview.ApplyConfig(AppConfig.Current, out var errorMessage))
+        {
+            _status.Text = $"启动失败: {errorMessage}";
+            return;
+        }
         _preview.Show();
         _preview.BringToFront();
 
         _start.Enabled = false;
         _stop.Enabled = true;
-        _status.Text = "镜像运行中。把预览窗交给 SteamVR / OVR Toolkit / Desktop+ 去抓即可。";
+        var runningStatus = AppConfig.Current.CaptureMode switch
+        {
+            CaptureMode.DwmWindow => "窗口代理运行中。把 Lyrics Mirror Preview 交给 SteamVR / OVR Toolkit / Desktop+ 去抓即可。",
+            CaptureMode.WindowChromaKey => "窗口捕获抠色运行中。预览窗会贴合源窗口并鼠标穿透。",
+            _ => "区域抠色运行中。把预览窗交给 SteamVR / OVR Toolkit / Desktop+ 去抓即可。"
+        };
+
+        if (!_preview.TryGetPreviewStyleStatus(out var styleStatus))
+            _status.Text = styleStatus;
+        else
+            _status.Text = $"{runningStatus} {styleStatus}";
     }
 
     private void StopPreview()
@@ -170,5 +253,189 @@ internal sealed class ControlForm : Form
         _start.Enabled = true;
         _stop.Enabled = false;
         _status.Text = "已停止";
+    }
+
+    private void ToggleBackdrop()
+    {
+        if (!SaveUiToConfig()) return;
+
+        if (_showBackdrop.Checked)
+        {
+            _backdrop ??= new BackdropForm();
+            _backdrop.LockedChanged -= BackdropLockedChanged;
+            _backdrop.LockedChanged += BackdropLockedChanged;
+            _backdrop.ApplyConfig(AppConfig.Current);
+            _backdrop.Show();
+            _backdrop.SendToBack();
+            _status.Text = "黑色底板已显示。把桌面歌词放到底板上方，再框选同一区域。";
+        }
+        else
+        {
+            _backdrop?.Hide();
+            _status.Text = "黑色底板已隐藏";
+        }
+
+        UpdateModeUi();
+    }
+
+    private void ApplyBackdropLock()
+    {
+        AppConfig.Current.BackdropLocked = _lockBackdrop.Checked;
+        _backdrop?.ApplyLocked(_lockBackdrop.Checked);
+        _ = SaveUiToConfig();
+    }
+
+    private void AlignBackdropToSourceRegion()
+    {
+        AppConfig.Current.BackdropX = (int)_x.Value;
+        AppConfig.Current.BackdropY = (int)_y.Value;
+        AppConfig.Current.BackdropWidth = (int)_w.Value;
+        AppConfig.Current.BackdropHeight = (int)_h.Value;
+
+        if (!_showBackdrop.Checked)
+            _showBackdrop.Checked = true;
+        else
+            ApplyToBackdrop();
+
+        if (!SaveUiToConfig()) return;
+        _status.Text = "黑色底板已对齐到当前源区域";
+    }
+
+    private void ApplyToBackdrop()
+    {
+        if (!_showBackdrop.Checked || _backdrop is null) return;
+        _backdrop.ApplyConfig(AppConfig.Current);
+        _backdrop.Show();
+        _backdrop.SendToBack();
+    }
+
+    private void BackdropLockedChanged(object? sender, EventArgs e)
+    {
+        if (_backdrop is null) return;
+
+        var locked = _backdrop.IsLocked;
+        if (_lockBackdrop.Checked != locked)
+            _lockBackdrop.Checked = locked;
+    }
+
+    private void CaptureModeChanged()
+    {
+        if (GetSelectedCaptureMode() == CaptureMode.WindowChromaKey)
+        {
+            _colorPreview.BackColor = Color.Black;
+            if (_threshold.Value == 36)
+                _threshold.Value = 16;
+        }
+
+        UpdateModeUi();
+        _ = SaveUiToConfig();
+    }
+
+    private string GetSelectedCaptureMode()
+    {
+        return _captureModeSelector.SelectedIndex switch
+        {
+            1 => CaptureMode.WindowChromaKey,
+            2 => CaptureMode.RegionChromaKey,
+            _ => CaptureMode.DwmWindow
+        };
+    }
+
+    private void UpdateModeUi()
+    {
+        var mode = GetSelectedCaptureMode();
+        var isDwm = mode == CaptureMode.DwmWindow;
+        var isWindowCapture = mode == CaptureMode.WindowChromaKey;
+        var isWindowMode = isDwm || isWindowCapture;
+        var isRegion = mode == CaptureMode.RegionChromaKey;
+
+        _windowList.Enabled = isWindowMode;
+        _scanWindows.Enabled = isWindowMode;
+        _bindWindow.Enabled = isWindowMode;
+        _refreshDwm.Enabled = isDwm;
+
+        _x.Enabled = isRegion;
+        _y.Enabled = isRegion;
+        _w.Enabled = isRegion;
+        _h.Enabled = isRegion;
+        _threshold.Enabled = isRegion || isWindowCapture;
+        _pickRegion.Enabled = isRegion;
+        _pickColor.Enabled = isRegion || isWindowCapture;
+        _alignBackdrop.Enabled = isRegion;
+        _showBackdrop.Enabled = isRegion;
+        _lockBackdrop.Enabled = isRegion && _showBackdrop.Checked;
+    }
+
+    private void ScanWindows()
+    {
+        var windows = WindowEnumerator.EnumerateTopLevelWindows();
+        _windowList.BeginUpdate();
+        try
+        {
+            _windowList.Items.Clear();
+            foreach (var window in windows)
+                _windowList.Items.Add(window);
+        }
+        finally
+        {
+            _windowList.EndUpdate();
+        }
+
+        _status.Text = $"已扫描 {windows.Count} 个顶层窗口。工具窗口未过滤。";
+    }
+
+    private void BindSelectedWindow()
+    {
+        if (_windowList.SelectedItem is not WindowInfo window)
+        {
+            _status.Text = "请先在窗口列表中选择一个窗口";
+            return;
+        }
+
+        AppConfig.Current.SourceWindowHandle = window.Hwnd.ToInt64();
+        UpdateSelectedWindowLabel(window);
+        if (!SaveUiToConfig()) return;
+
+        if (_preview is not null && !_preview.ApplyConfig(AppConfig.Current, out var errorMessage))
+            _status.Text = $"绑定失败: {errorMessage}。可切回区域抠色。";
+        else
+            _status.Text = $"已绑定窗口: {window.Title} | {window.ClassName} | 0x{window.Hwnd.ToInt64():X} | {window.Bounds.X},{window.Bounds.Y} {window.Bounds.Width}x{window.Bounds.Height}";
+    }
+
+    private void RefreshDwmProxy()
+    {
+        if (_preview is null)
+        {
+            _status.Text = "预览窗未启动";
+            return;
+        }
+
+        if (_preview.RefreshThumbnail(out var errorMessage))
+            _status.Text = "窗口代理已刷新";
+        else
+            _status.Text = $"窗口代理刷新失败: {errorMessage}。可切回区域抠色。";
+    }
+
+    private void UpdateSelectedWindowLabel(WindowInfo? window = null)
+    {
+        if (window is not null)
+        {
+            _selectedWindow.Text = $"{window.Title} | {window.ClassName} | 0x{window.Hwnd.ToInt64():X}";
+            return;
+        }
+
+        _selectedWindow.Text = AppConfig.Current.SourceWindowHandle == 0
+            ? "未绑定窗口"
+            : $"已绑定 HWND: 0x{AppConfig.Current.SourceWindowHandle:X}";
+    }
+
+    private void PreviewStatusMessage(object? sender, string message)
+    {
+        _status.Text = message;
+        if (message.Contains("源窗口", StringComparison.CurrentCulture))
+        {
+            _start.Enabled = true;
+            _stop.Enabled = false;
+        }
     }
 }

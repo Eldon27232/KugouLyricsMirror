@@ -11,6 +11,14 @@ internal sealed class Config
     public int KeyColorArgb { get; set; } = Color.Black.ToArgb();
     public bool TopMost { get; set; } = true;
     public bool ExcludeFromCapture { get; set; } = false;
+    public string CaptureMode { get; set; } = KugouLyricsMirror.CaptureMode.DwmWindow;
+    public long SourceWindowHandle { get; set; } = 0;
+    public bool BackdropVisible { get; set; } = false;
+    public bool BackdropLocked { get; set; } = false;
+    public int BackdropX { get; set; } = 0;
+    public int BackdropY { get; set; } = 0;
+    public int BackdropWidth { get; set; } = 600;
+    public int BackdropHeight { get; set; } = 120;
 
     public Color KeyColor
     {
