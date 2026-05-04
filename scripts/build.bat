@@ -2,6 +2,7 @@
 setlocal
 cd /d "%~dp0\.."
 
+echo Requires .NET 10 SDK.
 echo [1/2] Building project...
 dotnet build -c Release
 if errorlevel 1 (

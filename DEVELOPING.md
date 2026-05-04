@@ -72,6 +72,10 @@ release\
 
 ## 最常用流程
 
+环境要求：
+- Windows 10 / 11
+- .NET 10 SDK
+
 ### 本地开发
 ```powershell
 dotnet run
