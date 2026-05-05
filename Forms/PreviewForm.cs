@@ -45,8 +45,7 @@ internal sealed class PreviewForm : Form
 
             if (_clickThrough)
             {
-                cp.ExStyle |= NativeMethods.WS_EX_TRANSPARENT
-                    | NativeMethods.WS_EX_NOACTIVATE;
+                cp.ExStyle |= NativeMethods.WS_EX_TRANSPARENT;
             }
 
             return cp;
@@ -100,6 +99,7 @@ internal sealed class PreviewForm : Form
         _regionKeyColor = config.RegionKeyColor;
         _windowChromaFillColor = config.WindowChromaFillColor;
         _followSourceWindow = config.WindowFollowSourceWindow;
+        _clickThrough = _captureMode == CaptureMode.WindowChromaKey && config.WindowClickThrough;
         TopMost = config.TopMost;
         _excludeFromCaptureRequested = config.ExcludeFromCapture;
         TryExcludeFromCapture(_captureMode == CaptureMode.DwmWindow && config.ExcludeFromCapture);
@@ -152,14 +152,16 @@ internal sealed class PreviewForm : Form
         {
             var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
             var hasNoActivate = (exStyle & NativeMethods.WS_EX_NOACTIVATE) != 0;
-            if (hasTransparent || hasNoActivate)
+            var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
+            if (hasNoActivate || hasTransparent != expectedTransparent)
             {
                 message = $"错误：{_captureMode} Preview 样式异常 ex=0x{exStyle:X} transparent={hasTransparent} noActivate={hasNoActivate}";
                 return false;
             }
 
             var follow = _captureMode == CaptureMode.WindowChromaKey && _followSourceWindow;
-            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough=false noActivate=false ex=0x{exStyle:X}";
+            var clickThrough = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
+            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough={clickThrough.ToString().ToLowerInvariant()} noActivate=false ex=0x{exStyle:X}";
         }
         else
         {
@@ -226,7 +228,7 @@ internal sealed class PreviewForm : Form
         ShowInTaskbar = true;
         TopMost = true;
         _timer.Interval = Math.Max(15, 1000 / _fps);
-        ApplyPreviewWindowStyles(enableLayeredTransparency: true, enableClickThrough: false);
+        ApplyPreviewWindowStyles(enableLayeredTransparency: true, enableClickThrough: _clickThrough);
 
         if (_sourceWindow == IntPtr.Zero || !NativeMethods.IsWindow(_sourceWindow))
         {
@@ -565,8 +567,7 @@ internal sealed class PreviewForm : Form
             return;
 
         var exStyle = NativeMethods.GetWindowLongPtr(Handle, NativeMethods.GWL_EXSTYLE).ToInt64();
-        long clickThroughFlags = NativeMethods.WS_EX_TRANSPARENT
-            | NativeMethods.WS_EX_NOACTIVATE;
+        long clickThroughFlags = NativeMethods.WS_EX_TRANSPARENT;
 
         exStyle &= ~NativeMethods.WS_EX_TOOLWINDOW;
         exStyle |= NativeMethods.WS_EX_APPWINDOW;
@@ -618,14 +619,16 @@ internal sealed class PreviewForm : Form
         {
             var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
             var hasNoActivate = (exStyle & NativeMethods.WS_EX_NOACTIVATE) != 0;
-            if (hasTransparent || hasNoActivate)
+            var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
+            if (hasNoActivate || hasTransparent != expectedTransparent)
             {
                 StatusMessage?.Invoke(this, $"错误：{_captureMode} Preview 样式异常 ex=0x{exStyle:X} transparent={hasTransparent} noActivate={hasNoActivate}");
                 return;
             }
 
             var follow = _captureMode == CaptureMode.WindowChromaKey && _followSourceWindow;
-            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough=false noActivate=false ex=0x{exStyle:X}";
+            var clickThrough = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
+            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough={clickThrough.ToString().ToLowerInvariant()} noActivate=false ex=0x{exStyle:X}";
         }
         else
         {

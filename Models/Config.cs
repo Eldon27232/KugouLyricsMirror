@@ -13,6 +13,7 @@ internal sealed class Config
     public bool RegionAutoKeyColor { get; set; } = true;
     public int? WindowChromaFillColorArgb { get; set; } = null;
     public bool WindowFollowSourceWindow { get; set; } = false;
+    public bool WindowClickThrough { get; set; } = false;
     public bool TopMost { get; set; } = true;
     public bool ExcludeFromCapture { get; set; } = false;
     public string CaptureMode { get; set; } = KugouLyricsMirror.CaptureMode.DwmWindow;
