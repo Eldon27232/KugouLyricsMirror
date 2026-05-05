@@ -153,7 +153,13 @@ internal sealed class PreviewForm : Form
             var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
             var hasNoActivate = (exStyle & NativeMethods.WS_EX_NOACTIVATE) != 0;
             var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
-            if (hasNoActivate || hasTransparent != expectedTransparent)
+            if (hasNoActivate)
+            {
+                message = "错误：Preview 含 WS_EX_NOACTIVATE，SteamVR 可能无法捕获。";
+                return false;
+            }
+
+            if (hasTransparent != expectedTransparent)
             {
                 message = $"错误：{_captureMode} Preview 样式异常 ex=0x{exStyle:X} transparent={hasTransparent} noActivate={hasNoActivate}";
                 return false;
@@ -161,7 +167,7 @@ internal sealed class PreviewForm : Form
 
             var follow = _captureMode == CaptureMode.WindowChromaKey && _followSourceWindow;
             var clickThrough = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
-            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough={clickThrough.ToString().ToLowerInvariant()} noActivate=false ex=0x{exStyle:X}";
+            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough={clickThrough.ToString().ToLowerInvariant()} noActivateStyle=false ex=0x{exStyle:X}";
         }
         else
         {
@@ -523,7 +529,7 @@ internal sealed class PreviewForm : Form
                 bounds.Y,
                 Math.Max(1, bounds.Width),
                 Math.Max(1, bounds.Height),
-                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER | NativeMethods.SWP_SHOWWINDOW);
         }
 
         if (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height)
@@ -575,6 +581,7 @@ internal sealed class PreviewForm : Form
             ? exStyle | NativeMethods.WS_EX_LAYERED
             : exStyle & ~NativeMethods.WS_EX_LAYERED;
         exStyle = _clickThrough ? exStyle | clickThroughFlags : exStyle & ~clickThroughFlags;
+        exStyle &= ~NativeMethods.WS_EX_NOACTIVATE;
 
         _ = NativeMethods.SetWindowLongPtr(Handle, NativeMethods.GWL_EXSTYLE, new IntPtr(exStyle));
         _ = NativeMethods.SetWindowPos(
@@ -587,6 +594,7 @@ internal sealed class PreviewForm : Form
             NativeMethods.SWP_NOMOVE
                 | NativeMethods.SWP_NOSIZE
                 | NativeMethods.SWP_NOZORDER
+                | NativeMethods.SWP_NOOWNERZORDER
                 | NativeMethods.SWP_NOACTIVATE
                 | NativeMethods.SWP_FRAMECHANGED);
 
@@ -620,7 +628,13 @@ internal sealed class PreviewForm : Form
             var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
             var hasNoActivate = (exStyle & NativeMethods.WS_EX_NOACTIVATE) != 0;
             var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
-            if (hasNoActivate || hasTransparent != expectedTransparent)
+            if (hasNoActivate)
+            {
+                StatusMessage?.Invoke(this, "错误：Preview 含 WS_EX_NOACTIVATE，SteamVR 可能无法捕获。");
+                return;
+            }
+
+            if (hasTransparent != expectedTransparent)
             {
                 StatusMessage?.Invoke(this, $"错误：{_captureMode} Preview 样式异常 ex=0x{exStyle:X} transparent={hasTransparent} noActivate={hasNoActivate}");
                 return;
@@ -628,7 +642,7 @@ internal sealed class PreviewForm : Form
 
             var follow = _captureMode == CaptureMode.WindowChromaKey && _followSourceWindow;
             var clickThrough = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
-            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough={clickThrough.ToString().ToLowerInvariant()} noActivate=false ex=0x{exStyle:X}";
+            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough={clickThrough.ToString().ToLowerInvariant()} noActivateStyle=false ex=0x{exStyle:X}";
         }
         else
         {

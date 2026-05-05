@@ -284,7 +284,6 @@ internal sealed class ControlForm : Form
             return;
         }
         _preview.Show();
-        _preview.BringToFront();
 
         _start.Enabled = false;
         _stop.Enabled = true;
