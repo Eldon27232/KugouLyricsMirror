@@ -1,232 +1,134 @@
 # KugouLyricsMirror
 
-将音乐软件的桌面歌词窗口转换 / 镜像为一个 **SteamVR、OVR Toolkit、Desktop+ 更容易捕获的普通透明窗口**。
-
-Mirror desktop lyrics from music apps into a normal transparent window that SteamVR / OVR Toolkit / Desktop+ can capture.
-
-很多桌面歌词，比如酷狗音乐、网易云音乐的桌面歌词，并不一定是标准应用窗口。它们可能是工具窗口、特殊 overlay 或透明悬浮窗，SteamVR 经常抓不到，或者只能抓到整块黑底。
-
-`KugouLyricsMirror` 的目标是把这些已有桌面歌词窗口或区域画面，输出为普通顶层窗口：
+KugouLyricsMirror converts an existing desktop lyrics window into a normal capturable window named:
 
 ```text
 Lyrics Mirror Preview
 ```
 
-你在 SteamVR / OVR Toolkit / Desktop+ 里捕获这个预览窗口，而不是直接捕获原播放器或原歌词窗口。
+It is mainly for VR users who want to capture desktop lyrics in SteamVR, OVR Toolkit, Desktop+, VRChat, or similar overlays.
 
-它不读取酷狗、网易云或其他播放器的歌词 API，也不会修改播放器本体。
+Many music apps, including Kugou and NetEase Cloud Music, render desktop lyrics as tool windows, overlays, or special transparent windows. SteamVR may not list those windows, may capture a black rectangle, or may fail to capture them reliably. KugouLyricsMirror does not read lyrics APIs and does not modify the player. It only captures or mirrors the lyrics window or a selected screen region, then outputs a regular top-level preview window for VR tools to capture.
 
----
+## Features
 
-## 功能 / Features
+### Window Capture Chroma Key (Recommended)
 
-### 窗口捕获抠色 / Window Capture Chroma Key
+`窗口捕获抠色` is the recommended mode for desktop lyrics.
 
-推荐优先使用。
+- Scans top-level desktop windows, including tool windows.
+- Binds a source lyrics window by HWND.
+- Captures the source window directly by HWND, with `PrintWindow` first and `GetWindowDC + BitBlt` as fallback.
+- Removes the black lyrics background with a conservative threshold.
+- Outputs the result to `Lyrics Mirror Preview`.
+- Supports `VR 叠加模式`, enabled by default:
+  - follows the source lyrics window position and size;
+  - overlays the source window;
+  - allows mouse click-through;
+  - uses soft no-focus behavior while moving with `SWP_NOACTIVATE`;
+  - does not use `WS_EX_NOACTIVATE`, because that breaks SteamVR capture on some systems.
 
-- 扫描桌面顶层窗口，包括工具窗口
-- 绑定酷狗 / 网易云等桌面歌词窗口 HWND
-- 按源窗口 HWND 捕获窗口内容，不走屏幕区域截图
-- 抠除黑色或指定背景色
-- 输出透明的 `Lyrics Mirror Preview`
-- 预览窗口自动覆盖源歌词窗口的位置和大小
-- 源窗口移动或缩放时，预览窗口跟随
-- 预览窗口鼠标穿透、不抢焦点
+When `VR 叠加模式` is turned off, the preview becomes a normal draggable window while still capturing the source HWND.
 
-This mode captures the lyric window by HWND, chroma-keys the background, and renders the result into `Lyrics Mirror Preview`.
+### DWM Window Proxy
 
-### 窗口代理 DWM / DWM Window Proxy
+`窗口代理 DWM` maps the selected source window into `Lyrics Mirror Preview` using a DWM thumbnail.
 
-- 通过 DWM thumbnail 将源窗口代理到 `Lyrics Mirror Preview`
-- 适合源窗口本身就可以直接显示的情况
-- 不负责把黑色背景变透明
+Use it when direct window proxying is enough. It does not chroma-key the image and does not make a black background transparent.
 
-Use this when directly proxying the source window is enough. It does not remove the background.
+### Region Chroma Key Fallback
 
-### 区域抠色 / Region Chroma Key
+`区域抠色` is the fallback mode.
 
-保留作为 fallback。
+- Captures a manually selected screen region.
+- Supports automatic background color detection.
+- Supports manual eyedropper color selection.
+- Supports RGB and hex color input.
+- Uses the configured threshold to remove the selected background color.
 
-- 手动框选屏幕区域
-- 吸管取背景色
-- 通过阈值抠除背景
-- 输出透明预览窗口
+Use this mode when a player window cannot be captured by HWND or proxied by DWM.
 
-Use this when window capture or DWM proxy does not work for a specific player window.
+## Recommended Usage
 
----
-
-## 推荐使用顺序 / Recommended Order
-
-1. 先试 `窗口捕获抠色`
-2. 如果捕获不到内容，再试 `窗口代理 DWM`
-3. 如果窗口模式都不可用，最后使用 `区域抠色`
-
-SteamVR / OVR Toolkit / Desktop+ 中应捕获：
-
-```text
-Lyrics Mirror Preview
-```
-
-不要捕获原始歌词窗口。
-
----
-
-## 使用方法 / Usage
-
-### 1. 打开桌面歌词
-
-先在音乐软件里打开桌面歌词，例如：
-
-- `桌面歌词 - 酷狗音乐`
-- 网易云音乐桌面歌词窗口
-
-### 2. 启动 KugouLyricsMirror
-
-运行：
-
-```text
-KugouLyricsMirror.exe
-```
-
-### 3. 选择捕获模式
-
-优先选择：
-
-```text
-窗口捕获抠色
-```
-
-### 4. 扫描并绑定歌词窗口
-
-点击 `扫描窗口`，在窗口列表里找到类似酷狗 / 网易云桌面歌词的窗口。
-
-窗口列表会显示：
-
-- 标题
-- 类名
-- HWND
-- 可见性
-- 窗口矩形
-- 扩展样式
-
-选择目标窗口后点击 `绑定窗口`。
-
-### 5. 调整背景色和阈值
-
-黑底歌词窗口通常使用：
-
-```text
-Key color: RGB(0, 0, 0)
-Threshold: 16
-```
-
-建议从 `12 ~ 24` 开始调。
-
-阈值越高，抠除越激进；阈值过高可能吃掉歌词的黑色描边或阴影。
-
-### 6. 启动镜像
-
-点击 `启动镜像`。
-
-程序会弹出：
+1. Open desktop lyrics in your music app.
+2. Start KugouLyricsMirror.
+3. Select `窗口捕获抠色`.
+4. Click `扫描窗口`.
+5. Select a lyrics window, for example `桌面歌词 - 酷狗音乐` or a NetEase desktop lyrics window.
+6. Click `绑定窗口`.
+7. Keep `高级：VR 叠加模式` enabled for VR overlay use.
+8. Click `启动镜像`.
+9. In SteamVR / OVR Toolkit / Desktop+, capture:
 
 ```text
 Lyrics Mirror Preview
 ```
 
-在 `窗口捕获抠色` 模式下，这个预览窗口会自动叠到源歌词窗口上方，并跟随源窗口移动 / 缩放。它会鼠标穿透，不挡点击，也不抢焦点。
+Do not capture the original player or original lyrics window.
 
-### 7. 在 VR 工具里捕获
+## Color Notes
 
-在以下工具中捕获 `Lyrics Mirror Preview`：
-
-- SteamVR
-- OVR Toolkit
-- Desktop+
-
----
-
-## 注意事项 / Notes
-
-- 不要开启 `预览窗不参与屏幕捕获` / `ExcludeFromCapture`，否则 SteamVR 可能抓黑或抓不到。
-- `窗口代理 DWM` 不会自动把黑底变透明。
-- 个别播放器窗口可能无法被 `PrintWindow` 捕获，需要切换到 `窗口代理 DWM` 或 `区域抠色`。
-- SteamVR 应捕获 `Lyrics Mirror Preview`，不是原始歌词窗口。
-- `Lyrics Mirror Preview` 是普通 top-level window，不是 tool window。
-
----
-
-## 工作原理 / How It Works
-
-`KugouLyricsMirror` 会枚举当前桌面顶层窗口，包括常见工具窗口。用户绑定源歌词窗口 HWND 后，程序根据模式处理画面：
-
-1. `窗口捕获抠色`：按 HWND 捕获源窗口内容，抠除指定背景色，再绘制到透明预览窗口。
-2. `窗口代理 DWM`：使用 DWM thumbnail 将源窗口代理到普通预览窗口。
-3. `区域抠色`：捕获用户框选的屏幕区域，按背景色阈值抠除。
-
-最终输出都是普通窗口：
+For `窗口捕获抠色`, the black background removal key is internally fixed to black:
 
 ```text
-Lyrics Mirror Preview
+RGB(0, 0, 0)
 ```
 
-让 SteamVR / OVR Toolkit / Desktop+ 捕获这个窗口。
+The default threshold is conservative, usually around `16`, to avoid eating black outlines or shadows in lyrics.
 
----
+For `区域抠色`, enable `自动` to let the app estimate the background color from the selected region. Disable it if you want to use the eyedropper or enter RGB / hex values manually.
 
-## 已测试场景 / Tested
+## Important Notes
 
-已在以下方向验证或设计支持：
+- Do not enable `ExcludeFromCapture`; SteamVR may capture black or fail to capture the window.
+- `Lyrics Mirror Preview` is a normal top-level app window, not a tool window.
+- `窗口代理 DWM` does not remove black backgrounds.
+- Some player windows cannot be captured by `PrintWindow`; try DWM proxy or region fallback in that case.
+- KugouLyricsMirror does not read Kugou, NetEase, or other lyrics APIs.
+- KugouLyricsMirror does not modify the music player.
 
-- 酷狗音乐桌面歌词 / Kugou Music desktop lyrics
-- 网易云音乐桌面歌词 / NetEase Cloud Music desktop lyrics
-- SteamVR
-- OVR Toolkit
-- Desktop+
+## How It Works
 
-不同播放器窗口实现不一样。如果某个模式不可用，按推荐顺序切换模式。
+KugouLyricsMirror enumerates desktop top-level windows and lets you bind a source lyrics HWND. Depending on the selected mode:
 
----
+1. `窗口捕获抠色` captures the source HWND, removes the black background, and renders to `Lyrics Mirror Preview`.
+2. `窗口代理 DWM` registers a DWM thumbnail from the source HWND to `Lyrics Mirror Preview`.
+3. `区域抠色` captures a selected screen region and removes a detected or selected background color.
 
-## 构建 / Build From Source
+All VR tools should capture `Lyrics Mirror Preview`.
 
-### 环境要求 / Requirements
+## Build
+
+Requirements:
 
 - Windows 10 / 11
 - .NET 10 SDK
 
-### 本地运行 / Run Locally
+Run locally:
 
 ```powershell
 dotnet run
 ```
 
-如果 `dotnet` 不在 PATH，但安装在默认位置：
+If `dotnet` is not on PATH but installed in the default location:
 
 ```powershell
 & "C:\Program Files\dotnet\dotnet.exe" run
 ```
 
-### 发布单文件 EXE / Publish Single-File EXE
+Publish a self-contained single-file EXE:
 
 ```powershell
 .\scripts\publish.ps1
 ```
 
-输出位置：
+Output:
 
 ```text
 dist\win-x64\KugouLyricsMirror.exe
 ```
 
-发布脚本使用：
-
-- `win-x64`
-- `--self-contained true`
-- `PublishSingleFile=true`
-
----
+The publish script targets `win-x64`, uses `--self-contained true`, and produces a single-file executable.
 
 ## License
 

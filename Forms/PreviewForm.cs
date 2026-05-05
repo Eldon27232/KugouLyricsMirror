@@ -18,11 +18,19 @@ internal sealed class PreviewForm : Form
     private IntPtr _sourceWindow;
     private IntPtr _thumbnail;
     private bool _clickThrough;
+    private bool _useLayeredTransparency;
+    private bool _excludeFromCaptureRequested;
+    private bool _previewLocationInitialized;
+    private bool _vrOverlayMode;
     private int _fps = 20;
     private int _threshold = 36;
-    private Color _keyColor = Color.Black;
+    private bool _regionAutoKeyColor = true;
+    private Color _regionKeyColor = Color.Black;
+    private Color _windowChromaFillColor = TransparentColor;
+    private Color? _lastReportedAutoKeyColor;
 
     public event EventHandler<string>? StatusMessage;
+    public event EventHandler<Color>? RegionAutoKeyColorChanged;
 
     protected override CreateParams CreateParams
     {
@@ -32,11 +40,12 @@ internal sealed class PreviewForm : Form
             cp.ExStyle &= ~NativeMethods.WS_EX_TOOLWINDOW;
             cp.ExStyle |= NativeMethods.WS_EX_APPWINDOW;
 
+            if (_useLayeredTransparency)
+                cp.ExStyle |= NativeMethods.WS_EX_LAYERED;
+
             if (_clickThrough)
             {
-                cp.ExStyle |= NativeMethods.WS_EX_LAYERED
-                    | NativeMethods.WS_EX_TRANSPARENT
-                    | NativeMethods.WS_EX_NOACTIVATE;
+                cp.ExStyle |= NativeMethods.WS_EX_TRANSPARENT;
             }
 
             return cp;
@@ -50,7 +59,6 @@ internal sealed class PreviewForm : Form
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = true;
         TopLevel = true;
-        ShowInTaskbar = true;
         BackColor = TransparentColor;
         TransparencyKey = TransparentColor;
         Controls.Add(_picture);
@@ -87,9 +95,14 @@ internal sealed class PreviewForm : Form
         _sourceWindow = config.SourceWindowHandle == 0 ? IntPtr.Zero : new IntPtr(config.SourceWindowHandle);
         _fps = Math.Clamp(config.Fps, 1, 60);
         _threshold = Math.Clamp(config.ColorThreshold, 0, 255);
-        _keyColor = config.KeyColor;
+        _regionAutoKeyColor = config.RegionAutoKeyColor;
+        _regionKeyColor = config.RegionKeyColor;
+        _windowChromaFillColor = config.WindowChromaFillColor;
+        _vrOverlayMode = _captureMode == CaptureMode.WindowChromaKey && config.WindowVrOverlayMode;
+        _clickThrough = _vrOverlayMode;
         TopMost = config.TopMost;
-        TryExcludeFromCapture(config.ExcludeFromCapture);
+        _excludeFromCaptureRequested = config.ExcludeFromCapture;
+        TryExcludeFromCapture(_captureMode == CaptureMode.DwmWindow && config.ExcludeFromCapture);
 
         if (_captureMode == CaptureMode.DwmWindow)
             return ApplyDwmMode(out errorMessage);
@@ -122,12 +135,53 @@ internal sealed class PreviewForm : Form
         var exStyle = NativeMethods.GetWindowLongPtr(Handle, NativeMethods.GWL_EXSTYLE).ToInt64();
         if ((exStyle & NativeMethods.WS_EX_TOOLWINDOW) != 0)
         {
-            message = "错误：Preview 窗口仍是 WS_EX_TOOLWINDOW，SteamVR 可能抓不到。";
+            message = _captureMode == CaptureMode.RegionChromaKey
+                ? "错误：区域抠色 Preview 仍是 WS_EX_TOOLWINDOW，SteamVR 可能抓不到。"
+                : "错误：Preview 窗口仍是 WS_EX_TOOLWINDOW，SteamVR 可能抓不到。";
             return false;
         }
 
-        message = $"Preview ex=0x{exStyle:X}";
+        if ((exStyle & NativeMethods.WS_EX_APPWINDOW) == 0)
+        {
+            message = $"错误：Preview 窗口缺少 WS_EX_APPWINDOW ex=0x{exStyle:X}";
+            return false;
+        }
+
+        message = $"Preview mode={_captureMode}";
+        if (_captureMode is CaptureMode.RegionChromaKey or CaptureMode.WindowChromaKey)
+        {
+            var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
+            var hasNoActivate = (exStyle & NativeMethods.WS_EX_NOACTIVATE) != 0;
+            var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _vrOverlayMode;
+            if (hasNoActivate)
+            {
+                message = "错误：Preview 含 WS_EX_NOACTIVATE，SteamVR 可能无法捕获。";
+                return false;
+            }
+
+            if (hasTransparent != expectedTransparent)
+            {
+                message = $"错误：{_captureMode} Preview 样式异常 ex=0x{exStyle:X} transparent={hasTransparent} noActivate={hasNoActivate}";
+                return false;
+            }
+
+            var vrOverlay = _captureMode == CaptureMode.WindowChromaKey && _vrOverlayMode;
+            message = $"{message} vrOverlay={vrOverlay.ToString().ToLowerInvariant()} follow={vrOverlay.ToString().ToLowerInvariant()} clickThrough={vrOverlay.ToString().ToLowerInvariant()} noActivateStyle=false ex=0x{exStyle:X}";
+        }
+        else
+        {
+            message = $"{message} ex=0x{exStyle:X}";
+        }
         return true;
+    }
+
+    public void SavePreviewBoundsToConfig(Config config)
+    {
+        if (!IsDisposed && Bounds.Width > 0 && Bounds.Height > 0)
+        {
+            config.PreviewX = Bounds.X;
+            config.PreviewY = Bounds.Y;
+        }
     }
 
     protected override void OnResize(EventArgs e)
@@ -140,29 +194,32 @@ internal sealed class PreviewForm : Form
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
-        if (_clickThrough)
-            ApplyClickThrough(true);
+        ApplyPreviewWindowStyles(_useLayeredTransparency, _clickThrough);
     }
 
     private void ApplyRegionMode()
     {
         UnregisterThumbnail();
-        ApplyClickThrough(false);
         DisposeFrameBuffers();
         ShowInTaskbar = true;
         _picture.Visible = true;
         BackColor = TransparentColor;
         TransparencyKey = TransparentColor;
+        ApplyPreviewWindowStyles(enableLayeredTransparency: false, enableClickThrough: false);
 
         if (ClientSize.Width != _sourceRect.Width || ClientSize.Height != _sourceRect.Height)
             ClientSize = new Size(_sourceRect.Width, _sourceRect.Height);
 
+        ApplyPreviewLocation(AppConfig.Current, _sourceRect);
         _timer.Interval = Math.Max(15, 1000 / _fps);
 
         if (Visible && !_timer.Enabled)
             _timer.Start();
         else if (!Visible)
             _timer.Stop();
+
+        if (_excludeFromCaptureRequested)
+            StatusMessage?.Invoke(this, "ExcludeFromCapture 会导致 SteamVR 抓黑或抓不到，不建议开启。");
     }
 
     private bool ApplyWindowChromaKeyMode(out string? errorMessage)
@@ -176,7 +233,7 @@ internal sealed class PreviewForm : Form
         ShowInTaskbar = true;
         TopMost = true;
         _timer.Interval = Math.Max(15, 1000 / _fps);
-        ApplyPreviewWindowStyles(enableClickThrough: true);
+        ApplyPreviewWindowStyles(enableLayeredTransparency: true, enableClickThrough: _clickThrough);
 
         if (_sourceWindow == IntPtr.Zero || !NativeMethods.IsWindow(_sourceWindow))
         {
@@ -184,8 +241,21 @@ internal sealed class PreviewForm : Form
             return false;
         }
 
-        if (!UpdateOverlayBounds(out errorMessage))
+        if (!WindowCapture.TryGetWindowBounds(_sourceWindow, out var bounds, out errorMessage))
             return false;
+
+        if (_vrOverlayMode)
+        {
+            if (!UpdateOverlayBounds(out errorMessage))
+                return false;
+        }
+        else if (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height)
+        {
+            ClientSize = new Size(Math.Max(1, bounds.Width), Math.Max(1, bounds.Height));
+        }
+
+        if (!_vrOverlayMode)
+            ApplyPreviewLocation(AppConfig.Current, bounds);
 
         if (Visible && !_timer.Enabled)
             _timer.Start();
@@ -200,11 +270,11 @@ internal sealed class PreviewForm : Form
         errorMessage = string.Empty;
         _timer.Stop();
         DisposeFrameBuffers();
-        ApplyClickThrough(false);
         ShowInTaskbar = true;
         _picture.Visible = false;
         BackColor = Color.Black;
         TransparencyKey = Color.Empty;
+        ApplyPreviewWindowStyles(enableLayeredTransparency: false, enableClickThrough: false);
 
         if (!Visible)
             return true;
@@ -261,7 +331,10 @@ internal sealed class PreviewForm : Form
         if (_renderBuffer is null) return;
 
         ScreenCapture.CopyScreenAreaToBitmap(_renderBuffer, _sourceRect);
-        ChromaKeyProcessor.Apply(_renderBuffer, _keyColor, _threshold, TransparentColor);
+        if (_regionAutoKeyColor)
+            UpdateAutoRegionKeyColor(_renderBuffer);
+
+        ChromaKeyProcessor.Apply(_renderBuffer, _regionKeyColor, _threshold, TransparentColor);
 
         var previousDisplay = _picture.Image as Bitmap;
         _picture.Image = _renderBuffer;
@@ -277,20 +350,23 @@ internal sealed class PreviewForm : Form
             return;
         }
 
-        if (!UpdateOverlayBounds(out var boundsError))
+        if (_vrOverlayMode && !UpdateOverlayBounds(out var boundsError))
         {
             _timer.Stop();
-            StatusMessage?.Invoke(this, boundsError ?? "更新源窗口位置失败");
+            StatusMessage?.Invoke(this, boundsError ?? "源窗口已关闭或失效");
             return;
         }
 
-        if (!WindowCapture.TryCapture(_sourceWindow, out var frame, out _, out var captureError) || frame is null)
+        if (!WindowCapture.TryCapture(_sourceWindow, out var frame, out var bounds, out var captureError) || frame is null)
         {
             StatusMessage?.Invoke(this, captureError ?? "源窗口捕获失败");
             return;
         }
 
-        ChromaKeyProcessor.Apply(frame, _keyColor, _threshold, TransparentColor);
+        if (!_vrOverlayMode && (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height))
+            ClientSize = new Size(Math.Max(1, bounds.Width), Math.Max(1, bounds.Height));
+
+        ChromaKeyProcessor.Apply(frame, Color.Black, _threshold, _windowChromaFillColor);
 
         var old = _picture.Image;
         _picture.Image = frame;
@@ -314,6 +390,26 @@ internal sealed class PreviewForm : Form
 
         DisposeFrameBuffers();
         _renderBuffer = new Bitmap(_sourceRect.Width, _sourceRect.Height);
+    }
+
+    private void UpdateAutoRegionKeyColor(Bitmap frame)
+    {
+        var color = ScreenCapture.EstimateBackgroundColor(frame);
+        _regionKeyColor = color;
+
+        if (_lastReportedAutoKeyColor.HasValue && ColorsNear(_lastReportedAutoKeyColor.Value, color))
+            return;
+
+        _lastReportedAutoKeyColor = color;
+        RegionAutoKeyColorChanged?.Invoke(this, color);
+        StatusMessage?.Invoke(this, $"区域抠色：自动背景色 RGB({color.R},{color.G},{color.B}) / 阈值 {_threshold}");
+    }
+
+    private static bool ColorsNear(Color left, Color right)
+    {
+        return Math.Abs(left.R - right.R) <= 2
+            && Math.Abs(left.G - right.G) <= 2
+            && Math.Abs(left.B - right.B) <= 2;
     }
 
     private void DisposeFrameBuffers()
@@ -427,12 +523,12 @@ internal sealed class PreviewForm : Form
         {
             _ = NativeMethods.SetWindowPos(
                 Handle,
-                NativeMethods.HWND_TOPMOST,
+                TopMost ? NativeMethods.HWND_TOPMOST : NativeMethods.HWND_NOTOPMOST,
                 bounds.X,
                 bounds.Y,
                 Math.Max(1, bounds.Width),
                 Math.Max(1, bounds.Height),
-                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_SHOWWINDOW);
+                NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER | NativeMethods.SWP_SHOWWINDOW);
         }
 
         if (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height)
@@ -441,20 +537,50 @@ internal sealed class PreviewForm : Form
         return true;
     }
 
-    private void ApplyClickThrough(bool enable)
+    private void ApplyPreviewLocation(Config config, Rectangle referenceRect)
     {
-        _clickThrough = enable;
+        if (_previewLocationInitialized && Visible)
+            return;
+
+        if (config.PreviewX.HasValue && config.PreviewY.HasValue)
+        {
+            Location = new Point(config.PreviewX.Value, config.PreviewY.Value);
+            _previewLocationInitialized = true;
+            return;
+        }
+
+        var screen = Screen.FromRectangle(referenceRect).WorkingArea;
+        Location = new Point(
+            screen.Left + Math.Max(0, (screen.Width - Width) / 2),
+            screen.Top + Math.Max(0, (screen.Height - Height) / 2));
+        _previewLocationInitialized = true;
+    }
+
+    private void ApplyPreviewWindowStyles(bool enableLayeredTransparency, bool enableClickThrough)
+    {
+        _useLayeredTransparency = enableLayeredTransparency;
+        _clickThrough = enableClickThrough;
+        if (!IsHandleCreated)
+            return;
+
+        ApplyCommonPreviewWindowStyles();
+    }
+
+    private void ApplyCommonPreviewWindowStyles()
+    {
         if (!IsHandleCreated)
             return;
 
         var exStyle = NativeMethods.GetWindowLongPtr(Handle, NativeMethods.GWL_EXSTYLE).ToInt64();
-        long clickThroughFlags = NativeMethods.WS_EX_TRANSPARENT
-            | NativeMethods.WS_EX_LAYERED
-            | NativeMethods.WS_EX_NOACTIVATE;
+        long clickThroughFlags = NativeMethods.WS_EX_TRANSPARENT;
 
         exStyle &= ~NativeMethods.WS_EX_TOOLWINDOW;
         exStyle |= NativeMethods.WS_EX_APPWINDOW;
-        exStyle = enable ? exStyle | clickThroughFlags : exStyle & ~clickThroughFlags;
+        exStyle = _useLayeredTransparency
+            ? exStyle | NativeMethods.WS_EX_LAYERED
+            : exStyle & ~NativeMethods.WS_EX_LAYERED;
+        exStyle = _clickThrough ? exStyle | clickThroughFlags : exStyle & ~clickThroughFlags;
+        exStyle &= ~NativeMethods.WS_EX_NOACTIVATE;
 
         _ = NativeMethods.SetWindowLongPtr(Handle, NativeMethods.GWL_EXSTYLE, new IntPtr(exStyle));
         _ = NativeMethods.SetWindowPos(
@@ -467,16 +593,11 @@ internal sealed class PreviewForm : Form
             NativeMethods.SWP_NOMOVE
                 | NativeMethods.SWP_NOSIZE
                 | NativeMethods.SWP_NOZORDER
+                | NativeMethods.SWP_NOOWNERZORDER
                 | NativeMethods.SWP_NOACTIVATE
                 | NativeMethods.SWP_FRAMECHANGED);
 
         ReportPreviewWindowStyle();
-    }
-
-    private void ApplyPreviewWindowStyles(bool enableClickThrough)
-    {
-        ShowInTaskbar = true;
-        ApplyClickThrough(enableClickThrough);
     }
 
     private void ReportPreviewWindowStyle()
@@ -487,10 +608,45 @@ internal sealed class PreviewForm : Form
         var exStyle = NativeMethods.GetWindowLongPtr(Handle, NativeMethods.GWL_EXSTYLE).ToInt64();
         if ((exStyle & NativeMethods.WS_EX_TOOLWINDOW) != 0)
         {
-            StatusMessage?.Invoke(this, "错误：Preview 窗口仍是 WS_EX_TOOLWINDOW，SteamVR 可能抓不到。");
+            var error = _captureMode == CaptureMode.RegionChromaKey
+                ? "错误：区域抠色 Preview 仍是 WS_EX_TOOLWINDOW，SteamVR 可能抓不到。"
+                : "错误：Preview 窗口仍是 WS_EX_TOOLWINDOW，SteamVR 可能抓不到。";
+            StatusMessage?.Invoke(this, error);
             return;
         }
 
-        StatusMessage?.Invoke(this, $"Preview ex=0x{exStyle:X}");
+        if ((exStyle & NativeMethods.WS_EX_APPWINDOW) == 0)
+        {
+            StatusMessage?.Invoke(this, $"错误：Preview 窗口缺少 WS_EX_APPWINDOW ex=0x{exStyle:X}");
+            return;
+        }
+
+        var message = $"Preview mode={_captureMode}";
+        if (_captureMode is CaptureMode.RegionChromaKey or CaptureMode.WindowChromaKey)
+        {
+            var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
+            var hasNoActivate = (exStyle & NativeMethods.WS_EX_NOACTIVATE) != 0;
+            var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _vrOverlayMode;
+            if (hasNoActivate)
+            {
+                StatusMessage?.Invoke(this, "错误：Preview 含 WS_EX_NOACTIVATE，SteamVR 可能无法捕获。");
+                return;
+            }
+
+            if (hasTransparent != expectedTransparent)
+            {
+                StatusMessage?.Invoke(this, $"错误：{_captureMode} Preview 样式异常 ex=0x{exStyle:X} transparent={hasTransparent} noActivate={hasNoActivate}");
+                return;
+            }
+
+            var vrOverlay = _captureMode == CaptureMode.WindowChromaKey && _vrOverlayMode;
+            message = $"{message} vrOverlay={vrOverlay.ToString().ToLowerInvariant()} follow={vrOverlay.ToString().ToLowerInvariant()} clickThrough={vrOverlay.ToString().ToLowerInvariant()} noActivateStyle=false ex=0x{exStyle:X}";
+        }
+        else
+        {
+            message = $"{message} ex=0x{exStyle:X}";
+        }
+
+        StatusMessage?.Invoke(this, message);
     }
 }

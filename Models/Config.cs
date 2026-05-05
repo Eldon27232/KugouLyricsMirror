@@ -9,6 +9,12 @@ internal sealed class Config
     public int Fps { get; set; } = 20;
     public int ColorThreshold { get; set; } = 36;
     public int KeyColorArgb { get; set; } = Color.Black.ToArgb();
+    public int? RegionKeyColorArgb { get; set; } = null;
+    public bool RegionAutoKeyColor { get; set; } = true;
+    public int? WindowChromaFillColorArgb { get; set; } = null;
+    public bool WindowVrOverlayMode { get; set; } = true;
+    public bool WindowFollowSourceWindow { get; set; } = false;
+    public bool WindowClickThrough { get; set; } = false;
     public bool TopMost { get; set; } = true;
     public bool ExcludeFromCapture { get; set; } = false;
     public string CaptureMode { get; set; } = KugouLyricsMirror.CaptureMode.DwmWindow;
@@ -19,10 +25,24 @@ internal sealed class Config
     public int BackdropY { get; set; } = 0;
     public int BackdropWidth { get; set; } = 600;
     public int BackdropHeight { get; set; } = 120;
+    public int? PreviewX { get; set; } = null;
+    public int? PreviewY { get; set; } = null;
 
     public Color KeyColor
     {
-        get => Color.FromArgb(KeyColorArgb);
-        set => KeyColorArgb = value.ToArgb();
+        get => RegionKeyColor;
+        set => RegionKeyColor = value;
+    }
+
+    public Color RegionKeyColor
+    {
+        get => Color.FromArgb(RegionKeyColorArgb ?? KeyColorArgb);
+        set => RegionKeyColorArgb = value.ToArgb();
+    }
+
+    public Color WindowChromaFillColor
+    {
+        get => Color.FromArgb(WindowChromaFillColorArgb ?? Color.Lime.ToArgb());
+        set => WindowChromaFillColorArgb = value.ToArgb();
     }
 }
