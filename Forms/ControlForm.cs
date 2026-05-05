@@ -13,8 +13,16 @@ internal sealed class ControlForm : Form
     private readonly CheckBox _excludeFromCapture = new() { Text = "预览窗不参与屏幕捕获（开了会导致 SteamVR 抓黑）", Checked = false, AutoSize = true };
     private readonly CheckBox _showBackdrop = new() { Text = "显示黑色底板", AutoSize = true };
     private readonly CheckBox _lockBackdrop = new() { Text = "锁定底板", AutoSize = true };
+    private readonly Label _colorMeaning = new() { Text = "当前抠色", AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
+    private readonly CheckBox _autoRegionKeyColor = new() { Text = "自动", Checked = true, AutoSize = true, Margin = new Padding(8, 5, 3, 3) };
+    private readonly NumericUpDown _colorR = new() { Maximum = 255, Minimum = 0, Width = 56 };
+    private readonly NumericUpDown _colorG = new() { Maximum = 255, Minimum = 0, Width = 56 };
+    private readonly NumericUpDown _colorB = new() { Maximum = 255, Minimum = 0, Width = 56 };
+    private readonly TextBox _hexColor = new() { Width = 82, CharacterCasing = CharacterCasing.Upper };
+    private readonly Button _resetColor = new() { Text = "恢复默认", AutoSize = true };
     private readonly Panel _colorPreview = new() { Width = 48, Height = 24, BorderStyle = BorderStyle.FixedSingle, Margin = new Padding(8, 3, 3, 3) };
     private readonly Label _status = new() { AutoSize = true, Text = "未启动" };
+    private bool _syncingColorUi;
 
     private PreviewForm? _preview;
     private BackdropForm? _backdrop;
@@ -74,8 +82,18 @@ internal sealed class ControlForm : Form
 
         var keyColorRow = new FlowLayoutPanel { AutoSize = true };
         keyColorRow.Controls.Add(_pickColor);
-        keyColorRow.Controls.Add(new Label { Text = "当前抠色", AutoSize = true, Margin = new Padding(8, 7, 0, 0) });
+        keyColorRow.Controls.Add(_autoRegionKeyColor);
+        keyColorRow.Controls.Add(_colorMeaning);
         keyColorRow.Controls.Add(_colorPreview);
+        keyColorRow.Controls.Add(new Label { Text = "R", AutoSize = true, Margin = new Padding(8, 7, 0, 0) });
+        keyColorRow.Controls.Add(_colorR);
+        keyColorRow.Controls.Add(new Label { Text = "G", AutoSize = true, Margin = new Padding(6, 7, 0, 0) });
+        keyColorRow.Controls.Add(_colorG);
+        keyColorRow.Controls.Add(new Label { Text = "B", AutoSize = true, Margin = new Padding(6, 7, 0, 0) });
+        keyColorRow.Controls.Add(_colorB);
+        keyColorRow.Controls.Add(new Label { Text = "#", AutoSize = true, Margin = new Padding(8, 7, 0, 0) });
+        keyColorRow.Controls.Add(_hexColor);
+        keyColorRow.Controls.Add(_resetColor);
         AddRow("背景色", keyColorRow);
 
         AddRow("阈值", _threshold);
@@ -99,6 +117,18 @@ internal sealed class ControlForm : Form
         _bindWindow.Click += (_, _) => BindSelectedWindow();
         _refreshDwm.Click += (_, _) => RefreshDwmProxy();
         _windowList.DoubleClick += (_, _) => BindSelectedWindow();
+        _colorR.ValueChanged += (_, _) => ApplyRgbInputs();
+        _colorG.ValueChanged += (_, _) => ApplyRgbInputs();
+        _colorB.ValueChanged += (_, _) => ApplyRgbInputs();
+        _hexColor.Leave += (_, _) => ApplyHexInput();
+        _hexColor.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode != Keys.Enter) return;
+            ApplyHexInput();
+            e.SuppressKeyPress = true;
+        };
+        _resetColor.Click += (_, _) => ResetKeyColorToDefault();
+        _autoRegionKeyColor.CheckedChanged += (_, _) => RegionAutoKeyColorChanged();
         _showBackdrop.CheckedChanged += (_, _) => ToggleBackdrop();
         _lockBackdrop.CheckedChanged += (_, _) => ApplyBackdropLock();
         _alignBackdrop.Click += (_, _) => AlignBackdropToSourceRegion();
@@ -134,13 +164,16 @@ internal sealed class ControlForm : Form
         _excludeFromCapture.Checked = AppConfig.Current.ExcludeFromCapture;
         _showBackdrop.Checked = AppConfig.Current.BackdropVisible;
         _lockBackdrop.Checked = AppConfig.Current.BackdropLocked;
-        _colorPreview.BackColor = AppConfig.Current.KeyColor;
+        _autoRegionKeyColor.Checked = AppConfig.Current.RegionAutoKeyColor;
+        SetColorInput(GetModeColor(), applyToPreview: false);
         UpdateSelectedWindowLabel();
         UpdateModeUi();
     }
 
     private bool SaveUiToConfig()
     {
+        TryUpdateAutoRegionKeyColorFromScreen();
+        _preview?.SavePreviewBoundsToConfig(AppConfig.Current);
         _backdrop?.SaveBoundsToConfig(AppConfig.Current);
         AppConfig.Current = new Config
         {
@@ -150,7 +183,14 @@ internal sealed class ControlForm : Form
             Height = (int)_h.Value,
             Fps = (int)_fps.Value,
             ColorThreshold = (int)_threshold.Value,
-            KeyColorArgb = _colorPreview.BackColor.ToArgb(),
+            KeyColorArgb = AppConfig.Current.KeyColorArgb,
+            RegionKeyColorArgb = GetSelectedCaptureMode() == CaptureMode.RegionChromaKey
+                ? _colorPreview.BackColor.ToArgb()
+                : AppConfig.Current.RegionKeyColor.ToArgb(),
+            RegionAutoKeyColor = _autoRegionKeyColor.Checked,
+            WindowChromaFillColorArgb = GetSelectedCaptureMode() == CaptureMode.WindowChromaKey
+                ? _colorPreview.BackColor.ToArgb()
+                : AppConfig.Current.WindowChromaFillColor.ToArgb(),
             TopMost = _topMost.Checked,
             ExcludeFromCapture = _excludeFromCapture.Checked,
             CaptureMode = GetSelectedCaptureMode(),
@@ -160,8 +200,11 @@ internal sealed class ControlForm : Form
             BackdropX = AppConfig.Current.BackdropX,
             BackdropY = AppConfig.Current.BackdropY,
             BackdropWidth = AppConfig.Current.BackdropWidth,
-            BackdropHeight = AppConfig.Current.BackdropHeight
+            BackdropHeight = AppConfig.Current.BackdropHeight,
+            PreviewX = AppConfig.Current.PreviewX,
+            PreviewY = AppConfig.Current.PreviewY
         };
+        _preview?.SavePreviewBoundsToConfig(AppConfig.Current);
         _backdrop?.SaveBoundsToConfig(AppConfig.Current);
         if (AppConfig.Save(out var errorMessage))
             return true;
@@ -191,8 +234,9 @@ internal sealed class ControlForm : Form
         using var picker = new ColorPickerForm();
         if (picker.ShowDialog() == DialogResult.OK)
         {
-            AppConfig.Current.KeyColor = picker.SelectedColor;
-            _colorPreview.BackColor = picker.SelectedColor;
+            if (GetSelectedCaptureMode() == CaptureMode.RegionChromaKey)
+                _autoRegionKeyColor.Checked = false;
+            SetColorInput(picker.SelectedColor, applyToPreview: false);
             _status.Text = $"已取色: RGB({picker.SelectedColor.R},{picker.SelectedColor.G},{picker.SelectedColor.B})";
             ApplyToPreview();
         }
@@ -212,8 +256,8 @@ internal sealed class ControlForm : Form
         _status.Text = AppConfig.Current.CaptureMode switch
         {
             CaptureMode.DwmWindow => $"窗口代理已应用: 0x{AppConfig.Current.SourceWindowHandle:X}",
-            CaptureMode.WindowChromaKey => $"窗口捕获抠色已应用: 0x{AppConfig.Current.SourceWindowHandle:X} / 阈值 {AppConfig.Current.ColorThreshold}",
-            _ => $"区域 {AppConfig.Current.X},{AppConfig.Current.Y} {AppConfig.Current.Width}x{AppConfig.Current.Height} @ {AppConfig.Current.Fps} FPS / 阈值 {AppConfig.Current.ColorThreshold}"
+            CaptureMode.WindowChromaKey => $"窗口捕获抠色已应用: 0x{AppConfig.Current.SourceWindowHandle:X} / 黑底阈值 {AppConfig.Current.ColorThreshold} / 镜像背景色 RGB({AppConfig.Current.WindowChromaFillColor.R},{AppConfig.Current.WindowChromaFillColor.G},{AppConfig.Current.WindowChromaFillColor.B})",
+            _ => GetRegionColorStatus()
         };
     }
 
@@ -224,6 +268,8 @@ internal sealed class ControlForm : Form
         _preview ??= new PreviewForm();
         _preview.StatusMessage -= PreviewStatusMessage;
         _preview.StatusMessage += PreviewStatusMessage;
+        _preview.RegionAutoKeyColorChanged -= PreviewRegionAutoKeyColorChanged;
+        _preview.RegionAutoKeyColorChanged += PreviewRegionAutoKeyColorChanged;
         if (!_preview.ApplyConfig(AppConfig.Current, out var errorMessage))
         {
             _status.Text = $"启动失败: {errorMessage}";
@@ -237,14 +283,19 @@ internal sealed class ControlForm : Form
         var runningStatus = AppConfig.Current.CaptureMode switch
         {
             CaptureMode.DwmWindow => "窗口代理运行中。把 Lyrics Mirror Preview 交给 SteamVR / OVR Toolkit / Desktop+ 去抓即可。",
-            CaptureMode.WindowChromaKey => "窗口捕获抠色运行中。预览窗会贴合源窗口并鼠标穿透。",
+            CaptureMode.WindowChromaKey => "窗口捕获抠色运行中。预览窗为普通可拖动窗口。",
             _ => "区域抠色运行中。把预览窗交给 SteamVR / OVR Toolkit / Desktop+ 去抓即可。"
         };
 
         if (!_preview.TryGetPreviewStyleStatus(out var styleStatus))
             _status.Text = styleStatus;
         else
-            _status.Text = $"{runningStatus} {styleStatus}";
+        {
+            var excludeWarning = AppConfig.Current.CaptureMode == CaptureMode.RegionChromaKey && AppConfig.Current.ExcludeFromCapture
+                ? " ExcludeFromCapture 会导致 SteamVR 抓黑或抓不到，不建议开启。"
+                : "";
+            _status.Text = $"{runningStatus} {styleStatus}{excludeWarning}";
+        }
     }
 
     private void StopPreview()
@@ -322,9 +373,13 @@ internal sealed class ControlForm : Form
     {
         if (GetSelectedCaptureMode() == CaptureMode.WindowChromaKey)
         {
-            _colorPreview.BackColor = Color.Black;
+            SetColorInput(AppConfig.Current.WindowChromaFillColor, applyToPreview: false);
             if (_threshold.Value == 36)
                 _threshold.Value = 16;
+        }
+        else
+        {
+            SetColorInput(GetModeColor(), applyToPreview: false);
         }
 
         UpdateModeUi();
@@ -361,6 +416,13 @@ internal sealed class ControlForm : Form
         _threshold.Enabled = isRegion || isWindowCapture;
         _pickRegion.Enabled = isRegion;
         _pickColor.Enabled = isRegion || isWindowCapture;
+        _autoRegionKeyColor.Visible = isRegion;
+        _colorMeaning.Text = isWindowCapture ? "镜像背景色" : "当前抠色";
+        _colorR.Enabled = isRegion || isWindowCapture;
+        _colorG.Enabled = isRegion || isWindowCapture;
+        _colorB.Enabled = isRegion || isWindowCapture;
+        _hexColor.Enabled = isRegion || isWindowCapture;
+        _resetColor.Enabled = isRegion || isWindowCapture;
         _alignBackdrop.Enabled = isRegion;
         _showBackdrop.Enabled = isRegion;
         _lockBackdrop.Enabled = isRegion && _showBackdrop.Checked;
@@ -437,5 +499,126 @@ internal sealed class ControlForm : Form
             _start.Enabled = true;
             _stop.Enabled = false;
         }
+    }
+
+    private void PreviewRegionAutoKeyColorChanged(object? sender, Color color)
+    {
+        if (GetSelectedCaptureMode() != CaptureMode.RegionChromaKey || !_autoRegionKeyColor.Checked)
+            return;
+
+        SetColorInput(color, applyToPreview: false);
+    }
+
+    private void TryUpdateAutoRegionKeyColorFromScreen()
+    {
+        if (GetSelectedCaptureMode() != CaptureMode.RegionChromaKey || !_autoRegionKeyColor.Checked)
+            return;
+
+        var sourceRect = new Rectangle((int)_x.Value, (int)_y.Value, Math.Max(1, (int)_w.Value), Math.Max(1, (int)_h.Value));
+        using var sample = new Bitmap(sourceRect.Width, sourceRect.Height);
+        ScreenCapture.CopyScreenAreaToBitmap(sample, sourceRect);
+        var color = ScreenCapture.EstimateBackgroundColor(sample);
+        SetColorInput(color, applyToPreview: false);
+        _status.Text = $"区域抠色：自动背景色 RGB({color.R},{color.G},{color.B}) / 阈值 {(int)_threshold.Value}";
+    }
+
+    private void SetColorInput(Color color, bool applyToPreview)
+    {
+        _syncingColorUi = true;
+        try
+        {
+            _colorPreview.BackColor = color;
+            _colorR.Value = color.R;
+            _colorG.Value = color.G;
+            _colorB.Value = color.B;
+            _hexColor.Text = $"{color.R:X2}{color.G:X2}{color.B:X2}";
+        }
+        finally
+        {
+            _syncingColorUi = false;
+        }
+
+        if (GetSelectedCaptureMode() == CaptureMode.WindowChromaKey)
+            AppConfig.Current.WindowChromaFillColor = color;
+        else
+            AppConfig.Current.RegionKeyColor = color;
+
+        if (applyToPreview)
+        {
+            _status.Text = GetSelectedCaptureMode() == CaptureMode.WindowChromaKey
+                ? $"镜像背景色: RGB({color.R},{color.G},{color.B}) / #{color.R:X2}{color.G:X2}{color.B:X2}"
+                : $"区域抠色：手动背景色 RGB({color.R},{color.G},{color.B}) / 阈值 {(int)_threshold.Value}";
+            ApplyToPreview();
+        }
+    }
+
+    private void ResetKeyColorToDefault()
+    {
+        if (GetSelectedCaptureMode() == CaptureMode.WindowChromaKey)
+        {
+            SetColorInput(Color.Lime, applyToPreview: false);
+            _threshold.Value = 16;
+            _status.Text = "已恢复窗口捕获抠色默认值：黑底抠除阈值 16，镜像背景使用透明兼容色。";
+        }
+        else
+        {
+            SetColorInput(Color.Black, applyToPreview: false);
+            _status.Text = $"区域抠色：手动背景色 RGB(0,0,0) / 阈值 {(int)_threshold.Value}";
+        }
+
+        ApplyToPreview();
+    }
+
+    private void RegionAutoKeyColorChanged()
+    {
+        AppConfig.Current.RegionAutoKeyColor = _autoRegionKeyColor.Checked;
+        if (_autoRegionKeyColor.Checked && GetSelectedCaptureMode() == CaptureMode.RegionChromaKey)
+            _status.Text = "区域抠色：自动背景色已开启";
+        else if (GetSelectedCaptureMode() == CaptureMode.RegionChromaKey)
+            _status.Text = $"区域抠色：手动背景色 RGB({_colorPreview.BackColor.R},{_colorPreview.BackColor.G},{_colorPreview.BackColor.B}) / 阈值 {(int)_threshold.Value}";
+
+        ApplyToPreview();
+    }
+
+    private void ApplyRgbInputs()
+    {
+        if (_syncingColorUi) return;
+        if (GetSelectedCaptureMode() == CaptureMode.RegionChromaKey)
+            _autoRegionKeyColor.Checked = false;
+        SetColorInput(Color.FromArgb((int)_colorR.Value, (int)_colorG.Value, (int)_colorB.Value), applyToPreview: true);
+    }
+
+    private void ApplyHexInput()
+    {
+        if (_syncingColorUi) return;
+
+        var text = _hexColor.Text.Trim();
+        if (text.StartsWith("#", StringComparison.Ordinal))
+            text = text[1..];
+
+        if (text.Length != 6 || !int.TryParse(text, System.Globalization.NumberStyles.HexNumber, null, out var value))
+        {
+            _status.Text = "十六进制颜色格式应为 RRGGBB，例如 000000 或 FFFFFF";
+            SetColorInput(_colorPreview.BackColor, applyToPreview: false);
+            return;
+        }
+
+        if (GetSelectedCaptureMode() == CaptureMode.RegionChromaKey)
+            _autoRegionKeyColor.Checked = false;
+        SetColorInput(Color.FromArgb((value >> 16) & 0xFF, (value >> 8) & 0xFF, value & 0xFF), applyToPreview: true);
+    }
+
+    private Color GetModeColor()
+    {
+        return GetSelectedCaptureMode() == CaptureMode.WindowChromaKey
+            ? AppConfig.Current.WindowChromaFillColor
+            : AppConfig.Current.RegionKeyColor;
+    }
+
+    private string GetRegionColorStatus()
+    {
+        var color = AppConfig.Current.RegionKeyColor;
+        var source = AppConfig.Current.RegionAutoKeyColor ? "自动" : "手动";
+        return $"区域抠色：{source}背景色 RGB({color.R},{color.G},{color.B}) / 阈值 {AppConfig.Current.ColorThreshold}";
     }
 }
