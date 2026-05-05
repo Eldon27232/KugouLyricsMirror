@@ -21,7 +21,7 @@ internal sealed class PreviewForm : Form
     private bool _useLayeredTransparency;
     private bool _excludeFromCaptureRequested;
     private bool _previewLocationInitialized;
-    private bool _followSourceWindow;
+    private bool _vrOverlayMode;
     private int _fps = 20;
     private int _threshold = 36;
     private bool _regionAutoKeyColor = true;
@@ -98,8 +98,8 @@ internal sealed class PreviewForm : Form
         _regionAutoKeyColor = config.RegionAutoKeyColor;
         _regionKeyColor = config.RegionKeyColor;
         _windowChromaFillColor = config.WindowChromaFillColor;
-        _followSourceWindow = config.WindowFollowSourceWindow;
-        _clickThrough = _captureMode == CaptureMode.WindowChromaKey && config.WindowClickThrough;
+        _vrOverlayMode = _captureMode == CaptureMode.WindowChromaKey && config.WindowVrOverlayMode;
+        _clickThrough = _vrOverlayMode;
         TopMost = config.TopMost;
         _excludeFromCaptureRequested = config.ExcludeFromCapture;
         TryExcludeFromCapture(_captureMode == CaptureMode.DwmWindow && config.ExcludeFromCapture);
@@ -152,7 +152,7 @@ internal sealed class PreviewForm : Form
         {
             var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
             var hasNoActivate = (exStyle & NativeMethods.WS_EX_NOACTIVATE) != 0;
-            var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
+            var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _vrOverlayMode;
             if (hasNoActivate)
             {
                 message = "错误：Preview 含 WS_EX_NOACTIVATE，SteamVR 可能无法捕获。";
@@ -165,9 +165,8 @@ internal sealed class PreviewForm : Form
                 return false;
             }
 
-            var follow = _captureMode == CaptureMode.WindowChromaKey && _followSourceWindow;
-            var clickThrough = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
-            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough={clickThrough.ToString().ToLowerInvariant()} noActivateStyle=false ex=0x{exStyle:X}";
+            var vrOverlay = _captureMode == CaptureMode.WindowChromaKey && _vrOverlayMode;
+            message = $"{message} vrOverlay={vrOverlay.ToString().ToLowerInvariant()} follow={vrOverlay.ToString().ToLowerInvariant()} clickThrough={vrOverlay.ToString().ToLowerInvariant()} noActivateStyle=false ex=0x{exStyle:X}";
         }
         else
         {
@@ -245,7 +244,7 @@ internal sealed class PreviewForm : Form
         if (!WindowCapture.TryGetWindowBounds(_sourceWindow, out var bounds, out errorMessage))
             return false;
 
-        if (_followSourceWindow)
+        if (_vrOverlayMode)
         {
             if (!UpdateOverlayBounds(out errorMessage))
                 return false;
@@ -255,7 +254,7 @@ internal sealed class PreviewForm : Form
             ClientSize = new Size(Math.Max(1, bounds.Width), Math.Max(1, bounds.Height));
         }
 
-        if (!_followSourceWindow)
+        if (!_vrOverlayMode)
             ApplyPreviewLocation(AppConfig.Current, bounds);
 
         if (Visible && !_timer.Enabled)
@@ -351,7 +350,7 @@ internal sealed class PreviewForm : Form
             return;
         }
 
-        if (_followSourceWindow && !UpdateOverlayBounds(out var boundsError))
+        if (_vrOverlayMode && !UpdateOverlayBounds(out var boundsError))
         {
             _timer.Stop();
             StatusMessage?.Invoke(this, boundsError ?? "源窗口已关闭或失效");
@@ -364,7 +363,7 @@ internal sealed class PreviewForm : Form
             return;
         }
 
-        if (!_followSourceWindow && (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height))
+        if (!_vrOverlayMode && (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height))
             ClientSize = new Size(Math.Max(1, bounds.Width), Math.Max(1, bounds.Height));
 
         ChromaKeyProcessor.Apply(frame, Color.Black, _threshold, _windowChromaFillColor);
@@ -627,7 +626,7 @@ internal sealed class PreviewForm : Form
         {
             var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
             var hasNoActivate = (exStyle & NativeMethods.WS_EX_NOACTIVATE) != 0;
-            var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
+            var expectedTransparent = _captureMode == CaptureMode.WindowChromaKey && _vrOverlayMode;
             if (hasNoActivate)
             {
                 StatusMessage?.Invoke(this, "错误：Preview 含 WS_EX_NOACTIVATE，SteamVR 可能无法捕获。");
@@ -640,9 +639,8 @@ internal sealed class PreviewForm : Form
                 return;
             }
 
-            var follow = _captureMode == CaptureMode.WindowChromaKey && _followSourceWindow;
-            var clickThrough = _captureMode == CaptureMode.WindowChromaKey && _clickThrough;
-            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough={clickThrough.ToString().ToLowerInvariant()} noActivateStyle=false ex=0x{exStyle:X}";
+            var vrOverlay = _captureMode == CaptureMode.WindowChromaKey && _vrOverlayMode;
+            message = $"{message} vrOverlay={vrOverlay.ToString().ToLowerInvariant()} follow={vrOverlay.ToString().ToLowerInvariant()} clickThrough={vrOverlay.ToString().ToLowerInvariant()} noActivateStyle=false ex=0x{exStyle:X}";
         }
         else
         {

@@ -12,6 +12,7 @@ internal sealed class Config
     public int? RegionKeyColorArgb { get; set; } = null;
     public bool RegionAutoKeyColor { get; set; } = true;
     public int? WindowChromaFillColorArgb { get; set; } = null;
+    public bool WindowVrOverlayMode { get; set; } = true;
     public bool WindowFollowSourceWindow { get; set; } = false;
     public bool WindowClickThrough { get; set; } = false;
     public bool TopMost { get; set; } = true;
