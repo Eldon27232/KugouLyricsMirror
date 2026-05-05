@@ -21,6 +21,7 @@ internal sealed class PreviewForm : Form
     private bool _useLayeredTransparency;
     private bool _excludeFromCaptureRequested;
     private bool _previewLocationInitialized;
+    private bool _followSourceWindow;
     private int _fps = 20;
     private int _threshold = 36;
     private bool _regionAutoKeyColor = true;
@@ -98,6 +99,7 @@ internal sealed class PreviewForm : Form
         _regionAutoKeyColor = config.RegionAutoKeyColor;
         _regionKeyColor = config.RegionKeyColor;
         _windowChromaFillColor = config.WindowChromaFillColor;
+        _followSourceWindow = config.WindowFollowSourceWindow;
         TopMost = config.TopMost;
         _excludeFromCaptureRequested = config.ExcludeFromCapture;
         TryExcludeFromCapture(_captureMode == CaptureMode.DwmWindow && config.ExcludeFromCapture);
@@ -145,7 +147,7 @@ internal sealed class PreviewForm : Form
             return false;
         }
 
-        message = $"Preview mode={_captureMode} ex=0x{exStyle:X}";
+        message = $"Preview mode={_captureMode}";
         if (_captureMode is CaptureMode.RegionChromaKey or CaptureMode.WindowChromaKey)
         {
             var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
@@ -156,7 +158,12 @@ internal sealed class PreviewForm : Form
                 return false;
             }
 
-            message = $"{message} follow=false clickThrough=false noActivate=false";
+            var follow = _captureMode == CaptureMode.WindowChromaKey && _followSourceWindow;
+            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough=false noActivate=false ex=0x{exStyle:X}";
+        }
+        else
+        {
+            message = $"{message} ex=0x{exStyle:X}";
         }
         return true;
     }
@@ -230,10 +237,18 @@ internal sealed class PreviewForm : Form
         if (!WindowCapture.TryGetWindowBounds(_sourceWindow, out var bounds, out errorMessage))
             return false;
 
-        if (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height)
+        if (_followSourceWindow)
+        {
+            if (!UpdateOverlayBounds(out errorMessage))
+                return false;
+        }
+        else if (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height)
+        {
             ClientSize = new Size(Math.Max(1, bounds.Width), Math.Max(1, bounds.Height));
+        }
 
-        ApplyPreviewLocation(AppConfig.Current, bounds);
+        if (!_followSourceWindow)
+            ApplyPreviewLocation(AppConfig.Current, bounds);
 
         if (Visible && !_timer.Enabled)
             _timer.Start();
@@ -328,13 +343,20 @@ internal sealed class PreviewForm : Form
             return;
         }
 
+        if (_followSourceWindow && !UpdateOverlayBounds(out var boundsError))
+        {
+            _timer.Stop();
+            StatusMessage?.Invoke(this, boundsError ?? "源窗口已关闭或失效");
+            return;
+        }
+
         if (!WindowCapture.TryCapture(_sourceWindow, out var frame, out var bounds, out var captureError) || frame is null)
         {
             StatusMessage?.Invoke(this, captureError ?? "源窗口捕获失败");
             return;
         }
 
-        if (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height)
+        if (!_followSourceWindow && (ClientSize.Width != bounds.Width || ClientSize.Height != bounds.Height))
             ClientSize = new Size(Math.Max(1, bounds.Width), Math.Max(1, bounds.Height));
 
         ChromaKeyProcessor.Apply(frame, Color.Black, _threshold, _windowChromaFillColor);
@@ -494,7 +516,7 @@ internal sealed class PreviewForm : Form
         {
             _ = NativeMethods.SetWindowPos(
                 Handle,
-                NativeMethods.HWND_TOPMOST,
+                TopMost ? NativeMethods.HWND_TOPMOST : NativeMethods.HWND_NOTOPMOST,
                 bounds.X,
                 bounds.Y,
                 Math.Max(1, bounds.Width),
@@ -591,7 +613,7 @@ internal sealed class PreviewForm : Form
             return;
         }
 
-        var message = $"Preview mode={_captureMode} ex=0x{exStyle:X}";
+        var message = $"Preview mode={_captureMode}";
         if (_captureMode is CaptureMode.RegionChromaKey or CaptureMode.WindowChromaKey)
         {
             var hasTransparent = (exStyle & NativeMethods.WS_EX_TRANSPARENT) != 0;
@@ -602,7 +624,12 @@ internal sealed class PreviewForm : Form
                 return;
             }
 
-            message = $"{message} follow=false clickThrough=false noActivate=false";
+            var follow = _captureMode == CaptureMode.WindowChromaKey && _followSourceWindow;
+            message = $"{message} follow={follow.ToString().ToLowerInvariant()} clickThrough=false noActivate=false ex=0x{exStyle:X}";
+        }
+        else
+        {
+            message = $"{message} ex=0x{exStyle:X}";
         }
 
         StatusMessage?.Invoke(this, message);

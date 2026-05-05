@@ -11,6 +11,7 @@ internal sealed class ControlForm : Form
     private readonly NumericUpDown _threshold = new() { Maximum = 255, Minimum = 0, Value = 36, Width = 90 };
     private readonly CheckBox _topMost = new() { Text = "预览窗置顶" };
     private readonly CheckBox _excludeFromCapture = new() { Text = "预览窗不参与屏幕捕获（开了会导致 SteamVR 抓黑）", Checked = false, AutoSize = true };
+    private readonly CheckBox _followSourceWindow = new() { Text = "实验：跟随源窗口", Checked = false, AutoSize = true };
     private readonly CheckBox _showBackdrop = new() { Text = "显示黑色底板", AutoSize = true };
     private readonly CheckBox _lockBackdrop = new() { Text = "锁定底板", AutoSize = true };
     private readonly Label _colorMeaning = new() { Text = "当前抠色", AutoSize = true, Margin = new Padding(8, 7, 0, 0) };
@@ -97,7 +98,7 @@ internal sealed class ControlForm : Form
         AddRow("背景色", keyColorRow);
 
         AddRow("阈值", _threshold);
-        AddRow("选项", new FlowLayoutPanel { AutoSize = true, Controls = { _topMost, _excludeFromCapture } });
+        AddRow("选项", new FlowLayoutPanel { AutoSize = true, Controls = { _topMost, _excludeFromCapture, _followSourceWindow } });
         AddRow("黑色底板", new FlowLayoutPanel { AutoSize = true, Controls = { _showBackdrop, _lockBackdrop, _alignBackdrop } });
 
         var buttonRow = new FlowLayoutPanel { AutoSize = true, Dock = DockStyle.Fill };
@@ -129,6 +130,7 @@ internal sealed class ControlForm : Form
         };
         _resetColor.Click += (_, _) => ResetKeyColorToDefault();
         _autoRegionKeyColor.CheckedChanged += (_, _) => RegionAutoKeyColorChanged();
+        _followSourceWindow.CheckedChanged += (_, _) => FollowSourceWindowChanged();
         _showBackdrop.CheckedChanged += (_, _) => ToggleBackdrop();
         _lockBackdrop.CheckedChanged += (_, _) => ApplyBackdropLock();
         _alignBackdrop.Click += (_, _) => AlignBackdropToSourceRegion();
@@ -162,6 +164,7 @@ internal sealed class ControlForm : Form
         };
         _topMost.Checked = AppConfig.Current.TopMost;
         _excludeFromCapture.Checked = AppConfig.Current.ExcludeFromCapture;
+        _followSourceWindow.Checked = AppConfig.Current.WindowFollowSourceWindow;
         _showBackdrop.Checked = AppConfig.Current.BackdropVisible;
         _lockBackdrop.Checked = AppConfig.Current.BackdropLocked;
         _autoRegionKeyColor.Checked = AppConfig.Current.RegionAutoKeyColor;
@@ -191,6 +194,7 @@ internal sealed class ControlForm : Form
             WindowChromaFillColorArgb = GetSelectedCaptureMode() == CaptureMode.WindowChromaKey
                 ? _colorPreview.BackColor.ToArgb()
                 : AppConfig.Current.WindowChromaFillColor.ToArgb(),
+            WindowFollowSourceWindow = _followSourceWindow.Checked,
             TopMost = _topMost.Checked,
             ExcludeFromCapture = _excludeFromCapture.Checked,
             CaptureMode = GetSelectedCaptureMode(),
@@ -408,6 +412,8 @@ internal sealed class ControlForm : Form
         _scanWindows.Enabled = isWindowMode;
         _bindWindow.Enabled = isWindowMode;
         _refreshDwm.Enabled = isDwm;
+        _followSourceWindow.Enabled = isWindowCapture;
+        _followSourceWindow.Visible = isWindowCapture;
 
         _x.Enabled = isRegion;
         _y.Enabled = isRegion;
@@ -577,6 +583,12 @@ internal sealed class ControlForm : Form
         else if (GetSelectedCaptureMode() == CaptureMode.RegionChromaKey)
             _status.Text = $"区域抠色：手动背景色 RGB({_colorPreview.BackColor.R},{_colorPreview.BackColor.G},{_colorPreview.BackColor.B}) / 阈值 {(int)_threshold.Value}";
 
+        ApplyToPreview();
+    }
+
+    private void FollowSourceWindowChanged()
+    {
+        AppConfig.Current.WindowFollowSourceWindow = _followSourceWindow.Checked;
         ApplyToPreview();
     }
 
